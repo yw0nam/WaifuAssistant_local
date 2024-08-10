@@ -1,0 +1,6 @@
+websocket
+SpeechRecognition
+PyAudio
+openai
+scipy
+requests
