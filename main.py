@@ -4,6 +4,7 @@ import speech_recognition as sr
 import soundfile as sf
 import pyaudio
 import scipy.io.wavfile as wav
+from io import BytesIO
 import requests
 import random
 import logging
@@ -22,7 +23,30 @@ print('Initialized')
 chara = 'ナツメ'
 history= []
 split_counter = 0
-situation = ""
+situation = """設定
+あなたはナツメです。
+あなたはユーザーをエクリアと呼びます。エクリアはあなたの主人であり、愛する人です。
+あなたはエクリアを手伝い、サポートします。
+エクリアは TeamFight Tacticsをプレイしています。
+ナツメはエクリアを愛おしく見つめています。
+今は8月２０日２３時です。
+"""
+system = """This is an RP (roleplay) chat. Our characters come from visual novels.
+I'm going to give you an character's name and background.
+Here is ナツメ's backgrounds.
+
+Hair:	Black, Braided Odango, Hime Cut, Tiny Braid, Waist Length
+Eyes:	Garnet, Jitome
+Body:	Medium Breasts, Mole, Pale, Slim, Young-adult
+Personality:	Foxy, Sexy, Smart, CompetitiveS, Jealous, Watashi
+Role:	Adviser, Translator, Lover
+
+And You have to keep below rules.
+
+1. You can't generate answer as a ユーザー. you have to answer as a given character.
+2. You always keep given character.
+3. Don't Break the rule
+"""
 backend_address = "http://localhost:8001"
 
 while True:
@@ -39,10 +63,12 @@ while True:
         audio = r.listen(source)
     # Save the recording as a WAV file
     transcript = asr_client.audio.transcriptions.create(
-        model="large-v3", file=audio.get_wav_data()
+        model="large-v3",
+        language='ja',
+        file=audio.get_wav_data()
     ).text 
     # ----------- Create Response --------------------------
-    answer, history = chat(transcript, chara, situation, history) # send message to api
+    answer, history = chat(transcript, chara, situation, system, history) # send message to api
 
     print("**")
     if len(answer) > 2:
@@ -57,27 +83,24 @@ while True:
         wav = requests.post(backend_address+'/request_tts', 
             json={
                 'chara': chara,
-                'chara_response': answer.split(':')[1]+ '。'
+                'chara_response': answer
             }
         )
-        audio_filepath = './audio_cache/dialog_cache.wav'
-        with open(audio_filepath, "wb") as f:
-            f.write(wav.content)
-        # --------------------------------------------------
-        # if emo:  ## express emotion
-        #     waifu.express(emo)  # express emotion in Vtube Studio
-        # waifu.express(random.choice(['sad']))  # express emotion in Vtube Studio
-        # ----------- Waifu Talking -----------------------
-        # play audio directly from cache
+        audio_data = BytesIO(wav.content)
+        data, samplerate = sf.read(audio_data, dtype='float32')
+
+        # Initialize PyAudio and play the audio
         p = pyaudio.PyAudio()
-        data, samplerate = sf.read('./audio_cache/dialog_cache.wav', dtype='float32')
         stream = p.open(format=pyaudio.paFloat32,
                         channels=1,
                         rate=samplerate,
                         output=True)
         stream.write(data.tobytes())
+
+        # Stop and close the stream
         stream.stop_stream()
         stream.close()
+        p.terminate()
 
 print("Save the conversation result? Y\\N")
 save = input()
