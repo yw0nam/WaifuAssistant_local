@@ -2,10 +2,10 @@ import sys
 import queue
 from vtube_studio import Char_control
 from time import ctime
-import speech_recognition as sr
+import aiohttp
+import asyncio
 import soundfile as sf
 import pyaudio
-import scipy.io.wavfile as wav
 from io import BytesIO
 import requests
 import threading
@@ -96,59 +96,75 @@ def play_audio(data, samplerate, p):
     stream.stop_stream()
     stream.close()
 
-def process_sentence(sentence, tts_chara, backend_address, p, queue):
-    """Function to request TTS and queue the audio."""
+def process_sentence(sentence, tts_chara, backend_address, p, audio_queue):
+    """Synchronous function to request TTS and queue the audio."""
     try:
-        wav = requests.post(backend_address+'/request_tts', 
-            json={
-                'chara': tts_chara,
-                'chara_response': sentence.strip()
-            }
-        )
-        wav.raise_for_status()
-        audio_data = BytesIO(wav.content)
+        response = requests.post(f"{backend_address}/request_tts", json={
+            'chara': tts_chara,
+            'chara_response': sentence.strip()
+        })
+        response.raise_for_status()
+        audio_data = BytesIO(response.content)
         data, samplerate = sf.read(audio_data, dtype='float32')
-        queue.append((data, samplerate))
+        audio_queue.put((data, samplerate))  # Add to audio queue for playback
     except requests.RequestException as e:
         print(f"Request failed: {e}")
     except Exception as e:
         print(f"Error processing sentence: {e}")
 
-def process_and_play_audio(streaming_response, backend_address, chara, announcer):
-    p = pyaudio.PyAudio()
-    audio_queue = []
-    
-    # Process the first sentence synchronously
-    # Process the remaining sentences in a separate thread
-    def run_process(sentence, backend_address):
-        tts_chara = chara if '「' in sentence else announcer
-        # tts_chara = chara
-        sentence = sentence.split('：')[-1]
-        if sentence.strip() != '':
-            process_sentence(sentence, tts_chara, backend_address, p, audio_queue)
-            
-    def process_remaining_sentences():
-        sentence_buffer = ""
-        for chunk in streaming_response.iter_content(decode_unicode=True, chunk_size=None):
-            sentence_buffer += chunk
-            sys.stdout.write(chunk)
-            sys.stdout.flush()  # Ensure content is printed immediately
-            if "\n" in sentence_buffer:
-                sentence = sentence_buffer
-                run_process(sentence, backend_address)
-                sentence_buffer = ""                
-        if sentence_buffer != '':
-            run_process(sentence, backend_address)
-        
-    threading.Thread(target=process_remaining_sentences).start()
-    
-    # Play audio sequentially as it becomes available in the queue
-    while audio_queue or threading.active_count() > 1:
-        if audio_queue:
-            data, samplerate = audio_queue.pop(0)
+def process_remaining_sentences(streaming_response, backend_address, chara, announcer, audio_queue, p):
+    """Process the streamed text response and queue audio."""
+    sentence_buffer = ""
+
+
+    # Iterate over the streamed content synchronously
+    for chunk in streaming_response.iter_content(decode_unicode=True):
+        sentence_buffer += chunk
+        sys.stdout.write(chunk)  # Display the chunk in real-time
+        sys.stdout.flush()
+
+        if "\n" in sentence_buffer:
+            sentence = sentence_buffer
+            tts_chara = chara if '「' in sentence else announcer
+            sentence = sentence.split('：')[-1].strip()
+            if sentence:
+                # Start processing the sentence for TTS immediately
+                threading.Thread(
+                    target=process_sentence,
+                    args=(sentence, tts_chara, backend_address, p, audio_queue)
+                ).start()
+            sentence_buffer = ""          
+
+    # Process any remaining buffer after streaming ends
+    if sentence_buffer != '':
+        tts_chara = chara if '「' in sentence_buffer else announcer
+        process_sentence(sentence_buffer, tts_chara, backend_address, p, audio_queue)
+
+def play_audio_queue(audio_queue, p):
+    """Play audio sequentially as it becomes available in the queue."""
+    while True:
+        try:
+            data, samplerate = audio_queue.get()  # Wait for audio data
             play_audio(data, samplerate, p)
-    
+        except queue.Empty:
+            if not threading.active_count() > 1:  # Exit if no more threads are running
+                break
+
+def process_and_play_audio(streaming_response, backend_address, chara, announcer):
+    """Main function to process and play audio while handling streamed responses."""
+    p = pyaudio.PyAudio()
+    audio_queue = queue.Queue()
+
+    # Start processing remaining sentences in a separate thread
+    threading.Thread(target=process_remaining_sentences, args=(
+        streaming_response, backend_address, chara, announcer, audio_queue, p
+    )).start()
+
+    # Play audio as it becomes available in the queue
+    play_audio_queue(audio_queue, p)
+
     p.terminate()
+
 
 try:
     while True:
@@ -195,5 +211,5 @@ except KeyboardInterrupt:
             }
         )
 #エクリア：「ナツメ…||彼女の淫乱で誘惑的な雰囲気に圧倒されて、僕はただナツメを欲しがるような目で見つめることしかできない。
-#　　
+#　エクリア：「会いたくて来たけど、だめ？」||僕はそう言いながらも、彼女の足を組むしぐさに、僕の目はナツメの下半身に釘付けになってしまう。
 # エクリア：「遊びか…例えなどんな遊び？」||僕は誘うような目でナツメを見つめながら言った。僕はちんぽが勃起している事をナツメに見せ付けるようにナツメの前に立った。
